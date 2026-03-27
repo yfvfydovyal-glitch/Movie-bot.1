@@ -14,10 +14,12 @@ bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
 CHANNEL = "@vexonova"
+
 ADMIN_ID =  7288303373  # ВСТАВ СВІЙ ЧИСЛОВИЙ ID
  
-CODES_FILE = "/data/codes.json"
-STATS_FILE = "/data/stats.json"
+CODES_FILE = "codes.json"
+STATS_FILE = "stats.json"
+
 
 def ensure_files():
     if not os.path.exists(CODES_FILE):
@@ -84,9 +86,11 @@ def update_stats(user_id: int, code: str):
     save_stats(stats)
 
 
+# 👇 ОБНОВЛЕННАЯ КЛАВИАТУРА
 keyboard = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="📢 Підписатися")],
+        [KeyboardButton(text="🔗 Додаткова ссылка")],
         [KeyboardButton(text="✅ Перевірити")]
     ],
     resize_keyboard=True
@@ -117,6 +121,12 @@ async def sub(message: Message):
     await message.answer(f"Ось канал 👉 https://t.me/{CHANNEL.replace('@', '')}")
 
 
+# 👇 НОВАЯ КНОПКА С ТВОЕЙ ССЫЛКОЙ
+@dp.message(F.text == "🔗 Додаткова ссылка")
+async def extra_link(message: Message):
+    await message.answer("Ось ссылка 👉 https://t.me/xo_xo?start=668b7f8b8416")
+
+
 @dp.message(F.text == "✅ Перевірити")
 async def verify(message: Message):
     if await check_sub(message.from_user.id):
@@ -126,7 +136,6 @@ async def verify(message: Message):
 
 
 # /add #1022 Тітанік
-# /add 1022 Тітанік
 @dp.message(F.text.startswith("/add"))
 async def add_code(message: Message):
     if message.from_user.id != ADMIN_ID:
@@ -151,8 +160,6 @@ async def add_code(message: Message):
         await message.answer("❌ Формат: /add #1022 Тітанік")
 
 
-# /del #1022
-# /del 1022
 @dp.message(F.text.startswith("/del"))
 async def delete_code(message: Message):
     if message.from_user.id != ADMIN_ID:
