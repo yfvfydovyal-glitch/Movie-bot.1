@@ -121,11 +121,6 @@ async def sub(message: Message):
     await message.answer(f"Ось канал 👉 https://t.me/{CHANNEL.replace('@', '')}")
 
 
-# 👇 НОВАЯ КНОПКА С ТВОЕЙ ССЫЛКОЙ
-@dp.message(F.text == "🔗 Додаткова ссылка")
-async def extra_link(message: Message):
-    await message.answer("Ось ссылка 👉 https://t.me/xo_xo?start=668b7f8b8416")
-
 
 @dp.message(F.text == "✅ Перевірити")
 async def verify(message: Message):
