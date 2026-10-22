@@ -17,9 +17,8 @@ CHANNEL = "@vexonova"
 
 ADMIN_ID =  7288303373  # ВСТАВ СВІЙ ЧИСЛОВИЙ ID
  
-CODES_FILE = "codes.json"
-STATS_FILE = "stats.json"
-
+CODES_FILE = "/data/codes.json"
+STATS_FILE = "/data/stats.json"
 
 def ensure_files():
     if not os.path.exists(CODES_FILE):
