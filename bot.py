@@ -90,7 +90,6 @@ def update_stats(user_id: int, code: str):
 keyboard = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="📢 Підписатися")],
-        [KeyboardButton(text="🔗 Додаткова ссылка")],
         [KeyboardButton(text="✅ Перевірити")]
     ],
     resize_keyboard=True
