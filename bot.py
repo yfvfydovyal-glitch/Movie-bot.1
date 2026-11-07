@@ -107,8 +107,8 @@ async def check_sub(user_id):
 async def start(message: Message):
     await message.answer(
         f"Привет 👋\n\n"
-        f"Подпишись на канал{CHANNEL}\n"
-        f"Потом нажми'Проверить'\n"
+        f"Подпишись на канал {CHANNEL}\n"
+        f"Потом нажми 'Проверить'\n"
         f"После этого введи код , например: #1122 либо 1122",
         reply_markup=keyboard
     )
