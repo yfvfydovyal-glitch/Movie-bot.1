@@ -88,8 +88,8 @@ def update_stats(user_id: int, code: str):
 # 👇 ОБНОВЛЕННАЯ КЛАВИАТУРА
 keyboard = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="📢 Підписатися")],
-        [KeyboardButton(text="✅ Перевірити")]
+        [KeyboardButton(text="📢 Подпишись")],
+        [KeyboardButton(text="✅ Проверить")]
     ],
     resize_keyboard=True
 )
@@ -106,10 +106,10 @@ async def check_sub(user_id):
 @dp.message(CommandStart())
 async def start(message: Message):
     await message.answer(
-        f"Привіт 👋\n\n"
-        f"Підпишись на канал {CHANNEL}\n"
-        f"Потім натисни 'Перевірити'\n"
-        f"Після цього введи код, наприклад: #1022 або 1022",
+        f"Привет 👋\n\n"
+        f"Подпишись на канал{CHANNEL}\n"
+        f"Потом нажми'Проверить'\n"
+        f"После этого введи код , например: #1122 либо 1122",
         reply_markup=keyboard
     )
 
