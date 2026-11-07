@@ -1,387 +1,288 @@
 import asyncio
 import json
+import logging
 import os
 
 from aiogram import Bot, Dispatcher, F
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
-from aiogram.filters import CommandStart
+from aiogram.exceptions import TelegramBadRequest
+from aiogram.filters import Command, CommandStart
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+    ReplyKeyboardRemove,
+)
 
 TOKEN = os.getenv("TOKEN")
-
 if not TOKEN:
     raise ValueError("❌ TOKEN не найден в Render Environment Variables")
 
-bot = Bot(token=TOKEN)
-dp = Dispatcher()
-
-# ДВА ОБЯЗАТЕЛЬНЫХ КАНАЛА
-CHANNELS = {
-    "@vexonova": "https://t.me/vexonova",
-    "@vexonova_channel": "https://t.me/vexonova_channel"
-}
-
 ADMIN_ID = 7288303373
+CHANNELS = [
+    ("@vexonova", "https://t.me/vexonova"),
+    ("@vexonova_channel", "https://t.me/vexonova_channel"),
+]
 
 CODES_FILE = "/data/codes.json"
 STATS_FILE = "/data/stats.json"
 
+bot = Bot(token=TOKEN)
+dp = Dispatcher()
+logging.basicConfig(level=logging.INFO)
 
-# СОЗДАНИЕ ФАЙЛОВ
+
 def ensure_files():
     os.makedirs("/data", exist_ok=True)
-
     if not os.path.exists(CODES_FILE):
-        with open(CODES_FILE, "w", encoding="utf-8") as f:
-            json.dump({}, f, ensure_ascii=False, indent=4)
-
+        save_json(CODES_FILE, {})
     if not os.path.exists(STATS_FILE):
-        with open(STATS_FILE, "w", encoding="utf-8") as f:
-            json.dump(
-                {
-                    "total_requests": 0,
-                    "unique_users": [],
-                    "codes": {}
-                },
-                f,
-                ensure_ascii=False,
-                indent=4
-            )
+        save_json(STATS_FILE, {
+            "total_requests": 0,
+            "unique_users": [],
+            "codes": {},
+        })
 
 
-def load_codes():
-    with open(CODES_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+def load_json(path):
+    with open(path, "r", encoding="utf-8") as file:
+        return json.load(file)
 
 
-def save_codes(codes):
-    with open(CODES_FILE, "w", encoding="utf-8") as f:
-        json.dump(codes, f, ensure_ascii=False, indent=4)
+def save_json(path, value):
+    with open(path, "w", encoding="utf-8") as file:
+        json.dump(value, file, ensure_ascii=False, indent=4)
 
 
-def load_stats():
-    with open(STATS_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+def normalize_code(value: str) -> str:
+    return value.strip().lstrip("#").upper()
 
 
-def save_stats(stats):
-    with open(STATS_FILE, "w", encoding="utf-8") as f:
-        json.dump(stats, f, ensure_ascii=False, indent=4)
-
-
-def normalize_code(raw_code: str) -> str:
-    code = raw_code.strip().upper()
-    if code.startswith("#"):
-        code = code[1:]
-    return code
-
-
-def display_code(raw_code: str) -> str:
-    return f"#{normalize_code(raw_code)}"
+def display_code(value: str) -> str:
+    return "#" + normalize_code(value)
 
 
 def update_stats(user_id: int, code: str):
-    stats = load_stats()
-
+    stats = load_json(STATS_FILE)
     stats["total_requests"] += 1
-
     if user_id not in stats["unique_users"]:
         stats["unique_users"].append(user_id)
-
-    if code not in stats["codes"]:
-        stats["codes"][code] = 0
-
-    stats["codes"][code] += 1
-    save_stats(stats)
+    stats["codes"][code] = stats["codes"].get(code, 0) + 1
+    save_json(STATS_FILE, stats)
 
 
-# КНОПКИ
-keyboard = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="📢 Подпишись")],
-        [KeyboardButton(text="✅ Проверить")]
-    ],
-    resize_keyboard=True
-)
-
-
-# ССЫЛКИ НА КАНАЛЫ
-def channels_text():
-    return (
-        "📢 Наши Telegram-каналы:\n\n"
-        "1️⃣ https://t.me/vexonova\n"
-        "2️⃣ https://t.me/vexonova_channel"
-    )
-
-
-# ПРОВЕРКА ПОДПИСКИ НА ОБА КАНАЛА
-async def check_sub(user_id):
-    missing_channels = []
+async def check_subscriptions(user_id: int):
+    """Returns (not_subscribed_channels, channels_with_check_errors)."""
+    missing = []
     errors = []
-
-    for channel, link in CHANNELS.items():
+    for username, _ in CHANNELS:
         try:
-            member = await bot.get_chat_member(channel, user_id)
-
-            is_subscribed = member.status in [
-                "member",
-                "administrator",
-                "creator"
-            ]
-
+            member = await bot.get_chat_member(username, user_id)
+            subscribed = member.status in ("member", "administrator", "creator")
             if member.status == "restricted":
-                is_subscribed = member.is_member
-
-            if not is_subscribed:
-                missing_channels.append(link)
-
-        except Exception as e:
-            print(f"Ошибка проверки {channel}: {e}")
-            errors.append(channel)
-
-    return missing_channels, errors
+                subscribed = member.is_member
+            if not subscribed:
+                missing.append(username)
+        except Exception:
+            logging.exception("Ошибка проверки подписки: %s", username)
+            errors.append(username)
+    return missing, errors
 
 
-# СООБЩЕНИЕ О НЕОБХОДИМОЙ ПОДПИСКЕ
-async def require_subscription(message):
-    missing, errors = await check_sub(message.from_user.id)
+def subscription_keyboard(missing, errors):
+    """Only show buttons for channels that aren't confirmed as subscribed."""
+    pending = set(missing) | set(errors)
+    if not pending:
+        return None
 
+    rows = []
+    for number, (username, url) in enumerate(CHANNELS, start=1):
+        if username in pending:
+            rows.append([
+                InlineKeyboardButton(text=f"📢 Подписаться {number}", url=url)
+            ])
+    rows.append([
+        InlineKeyboardButton(
+            text="✅ Проверить подписку", callback_data="check_subscriptions"
+        )
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def subscription_text(missing, errors):
+    if not missing and not errors:
+        return (
+            "✅ Подписка на оба канала подтверждена!\n\n"
+            "🎬 Теперь отправь код фильма, например #A7K2 или A7K2."
+        )
+    confirmed = len(CHANNELS) - len(missing) - len(errors)
+    result = (
+        "🎬 Vexonova\n\n"
+        "📢 Чтобы узнать название фильма, подпишись на оба канала.\n"
+        "Нажми кнопки ниже, затем «✅ Проверить подписку».\n\n"
+        f"✅ Подтверждено подписок: {confirmed} из {len(CHANNELS)}."
+    )
     if errors:
-        await message.answer(
-            "⚠️ Не удалось проверить подписку.\n"
-            "Попробуй позже или сообщи администратору."
+        result += (
+            "\n\n⚠️ Не удалось проверить некоторые подписки. "
+            "Убедись, что бот — администратор обоих каналов."
         )
-        return False
-
-    if missing:
-        text = (
-            "❌ Для получения названия фильма "
-            "нужно подписаться на ОБА канала!\n\n"
-            "Ты ещё не подписан на:\n\n"
-        )
-
-        for link in missing:
-            text += f"👉 {link}\n"
-
-        text += "\nПодпишись и нажми «✅ Проверить»."
-
-        await message.answer(text, reply_markup=keyboard)
-        return False
-
-    return True
+    return result
 
 
-# КОМАНДА /start
+async def send_subscription_screen(message: Message):
+    missing, errors = await check_subscriptions(message.from_user.id)
+    await message.answer(
+        subscription_text(missing, errors),
+        reply_markup=subscription_keyboard(missing, errors),
+    )
+    return not missing and not errors
+
+
 @dp.message(CommandStart())
 async def start(message: Message):
-    await message.answer(
-        "Привет! 👋\n\n"
-        "🎬 Добро пожаловать в Vexonova!\n\n"
-        "Здесь ты можешь узнать название фильма по коду.\n\n"
-        "Для начала подпишись на оба канала:\n\n"
-        "1️⃣ https://t.me/vexonova\n"
-        "2️⃣ https://t.me/vexonova_channel\n\n"
-        "✅ После подписки нажми «Проверить».\n\n"
-        "🔎 Затем введи код фильма, например:\n"
-        "#A7K2 или A7K2",
-        reply_markup=keyboard
+    # Remove the old large reply keyboard from the previous version of the bot.
+    await message.answer("👋 Привет!", reply_markup=ReplyKeyboardRemove())
+    await send_subscription_screen(message)
+
+
+@dp.message(F.text.in_({"📢 Подпишись", "📢 Підписатися", "✅ Проверить", "✅ Перевірити"}))
+async def old_buttons(message: Message):
+    # Keep older Telegram keyboard buttons working, too.
+    await send_subscription_screen(message)
+
+
+@dp.callback_query(F.data == "check_subscriptions")
+async def verify_subscriptions(callback: CallbackQuery):
+    missing, errors = await check_subscriptions(callback.from_user.id)
+    await callback.answer(
+        "✅ Подписка подтверждена!" if not missing and not errors
+        else "Подписки обновлены"
     )
+    if isinstance(callback.message, Message):
+        try:
+            await callback.message.edit_text(
+                subscription_text(missing, errors),
+                reply_markup=subscription_keyboard(missing, errors),
+            )
+        except TelegramBadRequest as exc:
+            if "message is not modified" not in str(exc).lower():
+                raise
 
 
-# КНОПКА ПОДПИСКИ
-@dp.message(F.text == "📢 Подпишись")
-async def sub(message: Message):
-    await message.answer(
-        channels_text() +
-        "\n\n✅ Подпишись на оба канала, "
-        "затем нажми «Проверить»."
-    )
-
-
-# КНОПКА ПРОВЕРКИ
-@dp.message(F.text == "✅ Проверить")
-async def verify(message: Message):
-    if await require_subscription(message):
-        await message.answer(
-            "✅ Отлично! Ты подписан на оба канала!\n\n"
-            "🎬 Теперь можешь вводить коды фильмов.\n\n"
-            "Например: #A7K2 или A7K2"
-        )
-
-
-# ДОБАВЛЕНИЕ ФИЛЬМА
-# /add #A7K2 Титаник
-@dp.message(F.text.startswith("/add"))
+@dp.message(Command("add"))
 async def add_code(message: Message):
     if message.from_user.id != ADMIN_ID:
-        await message.answer("❌ У тебя нет доступа")
+        await message.answer("❌ Нет доступа")
         return
-
-    try:
-        parts = message.text.split(maxsplit=2)
-
-        if len(parts) < 3:
-            await message.answer(
-                "❌ Формат: /add #A7K2 Титаник"
-            )
-            return
-
-        code = normalize_code(parts[1])
-        movie = parts[2].strip()
-
-        if not code or not movie:
-            await message.answer(
-                "❌ Формат: /add #A7K2 Титаник"
-            )
-            return
-
-        codes = load_codes()
-        codes[code] = movie
-        save_codes(codes)
-
-        await message.answer(
-            f"✅ Добавлено:\n"
-            f"{display_code(code)} → {movie}"
-        )
-
-    except Exception as e:
-        print(f"Ошибка добавления: {e}")
-        await message.answer("❌ Ошибка добавления фильма")
+    parts = message.text.split(maxsplit=2)
+    if len(parts) < 3 or not normalize_code(parts[1]) or not parts[2].strip():
+        await message.answer("❌ Формат: /add #A7K2 Титаник")
+        return
+    code = normalize_code(parts[1])
+    movie = parts[2].strip()
+    codes = load_json(CODES_FILE)
+    codes[code] = movie
+    save_json(CODES_FILE, codes)
+    await message.answer(f"✅ Добавлено: {display_code(code)} → {movie}")
 
 
-# УДАЛЕНИЕ ФИЛЬМА
-# /del #A7K2
-@dp.message(F.text.startswith("/del"))
+@dp.message(Command("del"))
 async def delete_code(message: Message):
     if message.from_user.id != ADMIN_ID:
-        await message.answer("❌ У тебя нет доступа")
+        await message.answer("❌ Нет доступа")
         return
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2 or not normalize_code(parts[1]):
+        await message.answer("❌ Формат: /del #A7K2")
+        return
+    code = normalize_code(parts[1])
+    codes = load_json(CODES_FILE)
+    if code not in codes:
+        await message.answer("❌ Код не найден")
+        return
+    del codes[code]
+    save_json(CODES_FILE, codes)
+    await message.answer(f"🗑 Удалён код: {display_code(code)}")
 
-    try:
-        parts = message.text.split(maxsplit=1)
 
-        if len(parts) < 2:
-            await message.answer(
-                "❌ Формат: /del #A7K2"
-            )
-            return
-
-        code = normalize_code(parts[1])
-        codes = load_codes()
-
-        if code in codes:
-            del codes[code]
-            save_codes(codes)
-
-            await message.answer(
-                f"🗑 Код удалён: {display_code(code)}"
-            )
+async def send_long_text(message: Message, lines):
+    part = ""
+    for line in lines:
+        line += "\n"
+        if len(part) + len(line) > 3500 and part:
+            await message.answer(part)
+            part = ""
+        if len(line) > 3500:
+            for i in range(0, len(line), 3500):
+                if part:
+                    await message.answer(part)
+                    part = ""
+                await message.answer(line[i:i + 3500])
         else:
-            await message.answer("❌ Код не найден")
-
-    except Exception as e:
-        print(f"Ошибка удаления: {e}")
-        await message.answer("❌ Ошибка удаления кода")
+            part += line
+    if part:
+        await message.answer(part)
 
 
-# СПИСОК ВСЕХ ФИЛЬМОВ
-@dp.message(F.text == "/list")
+@dp.message(Command("list"))
 async def list_codes(message: Message):
     if message.from_user.id != ADMIN_ID:
-        await message.answer("❌ У тебя нет доступа")
+        await message.answer("❌ Нет доступа")
         return
-
-    codes = load_codes()
-
+    codes = load_json(CODES_FILE)
     if not codes:
         await message.answer("📭 Список кодов пуст")
         return
-
-    lines = ["📃 Все коды:\n"]
-
-    for code, movie in codes.items():
-        lines.append(
-            f"{display_code(code)} — {movie}"
-        )
-
-    text = "\n".join(lines)
-
-    for i in range(0, len(text), 3500):
-        await message.answer(text[i:i + 3500])
+    lines = ["📃 Все коды:", ""] + [
+        f"{display_code(code)} — {movie}" for code, movie in codes.items()
+    ]
+    await send_long_text(message, lines)
 
 
-# СТАТИСТИКА БОТА
-@dp.message(F.text == "/stats")
+@dp.message(Command("stats"))
 async def stats_command(message: Message):
     if message.from_user.id != ADMIN_ID:
-        await message.answer("❌ У тебя нет доступа")
+        await message.answer("❌ Нет доступа")
         return
-
-    stats = load_stats()
-
-    total_requests = stats.get("total_requests", 0)
-    unique_users_count = len(
-        stats.get("unique_users", [])
-    )
-    codes_stats = stats.get("codes", {})
-
-    text = (
-        "📊 Аналитика бота:\n\n"
-        f"📩 Всего запросов: {total_requests}\n"
-        f"👥 Уникальных пользователей: "
-        f"{unique_users_count}\n\n"
-    )
-
-    if codes_stats:
-        text += "🔥 Популярность кодов:\n"
-
-        sorted_codes = sorted(
-            codes_stats.items(),
-            key=lambda x: x[1],
-            reverse=True
-        )
-
-        for code, count in sorted_codes:
-            text += (
-                f"{display_code(code)} — "
-                f"{count} раз(а)\n"
-            )
+    stats = load_json(STATS_FILE)
+    lines = [
+        "📊 Аналитика бота:", "",
+        f"📩 Всего запросов: {stats.get('total_requests', 0)}",
+        f"👥 Уникальных пользователей: {len(stats.get('unique_users', []))}",
+        "",
+    ]
+    counts = stats.get("codes", {})
+    if counts:
+        lines.append("🔥 Популярность кодов:")
+        for code, count in sorted(counts.items(), key=lambda x: x[1], reverse=True):
+            lines.append(f"{display_code(code)} — {count} раз(а)")
     else:
-        text += "Пока статистики по кодам нет"
-
-    for i in range(0, len(text), 3500):
-        await message.answer(text[i:i + 3500])
+        lines.append("Пока статистики по кодам нет")
+    await send_long_text(message, lines)
 
 
-# ПОИСК ФИЛЬМА ПО КОДУ
 @dp.message(F.text & ~F.text.startswith("/"))
 async def get_code(message: Message):
-
-    # СНАЧАЛА ПРОВЕРЯЕМ ОБЕ ПОДПИСКИ
-    if not await require_subscription(message):
+    missing, errors = await check_subscriptions(message.from_user.id)
+    if missing or errors:
+        await message.answer(
+            subscription_text(missing, errors),
+            reply_markup=subscription_keyboard(missing, errors),
+        )
         return
-
-    codes = load_codes()
     code = normalize_code(message.text)
-
+    codes = load_json(CODES_FILE)
     if code in codes:
         update_stats(message.from_user.id, code)
-
-        await message.answer(
-            f"🎬 Фильм: {codes[code]}"
-        )
+        await message.answer(f"🎬 Фильм: {codes[code]}")
     else:
-        await message.answer(
-            "❌ Код не найден.\n"
-            "Проверь правильность кода и попробуй снова."
-        )
+        await message.answer("❌ Код не найден")
 
 
-# ЗАПУСК БОТА
 async def main():
     ensure_files()
-    print("🚀 Vexonova Bot запущен!")
-    print("✅ Проверка подписки на 2 канала активна")
-
+    logging.info("Vexonova Bot запущен")
     await dp.start_polling(bot)
 
 
